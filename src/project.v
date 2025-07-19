@@ -43,6 +43,7 @@ module Rising_edge_detector(
     end
     assign rise_pulse = sig_in & ~d;
 endmodule
+
 module watchdogtimer(
 input  wire clk,
     input  wire rst_n,
@@ -76,6 +77,7 @@ input  wire clk,
     end
 
 endmodule
+
 module shutdown_FSM(
     input  wire clk,
     input  wire rst_n,
@@ -125,6 +127,7 @@ module shutdown_FSM(
         end
     end
 endmodule
+
 module slow_blinker(
  clk,
     rst_n,
@@ -145,7 +148,7 @@ module slow_blinker(
             C_LOG2 = i;
         end
     endfunction
-	 localparam integer CNT_MAX   = (CLK_HZ / 2 > 0) ? CLK_HZ / 2 : 1;  // 0.5 s
+	 localparam integer CNT_MAX   = (CLK_HZ / 2 > 0) ? CLK_HZ / 2 : 1;  // 0.5 s
     localparam integer CNT_WIDTH = C_LOG2(CNT_MAX) + 1;
 	 reg [CNT_WIDTH-1:0] cnt; 
 	 always @(posedge clk or negedge rst_n) begin
@@ -162,19 +165,17 @@ module slow_blinker(
 
 endmodule
 
-
-
 module Esd_controller(
     input  clk,             // System clock
     input  rst_n,           // Asynchronous, active-low reset
     input  estop_a_n,       // E-STOP A (active-low)
     input  estop_b_n,       // E-STOP B (active-low)
     input  ack_n,           // ACK / Reset button (active-low)
-    input  wdg_kick,  // Watchdog kick input
+    input  wdg_kick,        // Watchdog kick input
     output shutdown_o,      // Shutdown output
     output led_stat_o       // Status LED
 );
-reg sync_o;
+
 parameter CLK_HZ = 24000000;
   wire estop_a, estop_b, ack_btn;
    debounce_button #(.CNT_WIDTH(20)) db_a (
@@ -226,17 +227,15 @@ assign shutdown_o = shutdown;
 
     // Status LED blinker (active only if no fault)
     wire blink_led;
-slow_blinker #(.CLK_HZ(CLK_HZ)) blink_inst (
-    .clk(clk),
-    .rst_n(rst_n & ~latched_fault),  // Proper reset when rst_n is low OR fault exists
-    .led(blink_led)
-);
+    slow_blinker #(.CLK_HZ(CLK_HZ)) blink_inst (
+        .clk(clk),
+        .rst_n(rst_n & ~latched_fault),  // LED blinks only when no fault
+        .led(blink_led)
+    );
 
     assign led_stat_o = latched_fault ? 1'b1 : blink_led;
 	 
- 
 endmodule
-
 
 module tt_um_example (
     input  wire [7:0] ui_in,    // Dedicated inputs
@@ -257,12 +256,10 @@ module tt_um_example (
     wire estop_b_n   = ui_in[1];    // E-STOP B (active-low) 
     wire ack_n       = ui_in[2];    // ACK button (active-low)
     wire wdg_kick    = ui_in[3];    // Watchdog kick input
-    wire async_in    = ui_in[4];    // Async input (if needed)
     
     // Internal wires for ESD controller outputs
     wire shutdown_out;
     wire led_status;
-    wire sync_output;
     
     // Instantiate the ESD controller
     Esd_controller #(
@@ -274,27 +271,20 @@ module tt_um_example (
         .estop_b_n(estop_b_n),
         .ack_n(ack_n),
         .wdg_kick(wdg_kick),
-        .async_in(async_in),
         .shutdown_o(shutdown_out),
-        .led_stat_o(led_status),
-        .sync_out(sync_output)
+        .led_stat_o(led_status)
     );
     
     // Output assignments to TinyTapeout pins
     assign uo_out[0] = shutdown_out;    // Shutdown signal
     assign uo_out[1] = led_status;      // Status LED
-    assign uo_out[2] = sync_output;     // Sync output
-    assign uo_out[3] = 1'b0;            // Unused
-    assign uo_out[4] = 1'b0;            // Unused  
-    assign uo_out[5] = 1'b0;            // Unused
-    assign uo_out[6] = 1'b0;            // Unused
-    assign uo_out[7] = 1'b0;            // Unused
+    assign uo_out[7:2] = 6'b000000;     // Unused outputs
     
     // Bidirectional IOs - not used in this design
     assign uio_out = 8'b0;              // All outputs driven low
     assign uio_oe  = 8'b0;              // All pins set as inputs
 
     // List unused inputs to prevent warnings
-    wire _unused = &{ena, ui_in[7:5], uio_in, 1'b0};
+    wire _unused = &{ena, ui_in[7:4], uio_in, 1'b0};
 
 endmodule
