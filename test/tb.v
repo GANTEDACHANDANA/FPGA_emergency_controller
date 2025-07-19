@@ -256,7 +256,6 @@ module tb;
 
         $display("\n=== ESD Controller Testbench Complete ===");
         wait_cycles(100);
-        $finish;
     end
 
     // Timeout block (safe)
