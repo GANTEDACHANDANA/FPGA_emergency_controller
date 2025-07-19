@@ -1,6 +1,18 @@
 `timescale 1ns / 1ps
 
 module tb;
+    // Timing parameters - makes testbench more maintainable
+    parameter CLK_PERIOD = 20;          // 20ns = 50MHz
+    parameter CLK_FREQ_HZ = 50_000_000; // 50MHz
+    parameter DEBOUNCE_CYCLES = 1000;   // Debounce wait time
+    parameter WDG_KICK_INTERVAL_MS = 200; // Watchdog kick every 200ms
+    parameter WDG_TIMEOUT_MS = 500;     // Watchdog timeout at 500ms
+    parameter STARTUP_CYCLES = 100;     // Startup delay cycles
+    
+    // Calculated timing values
+    parameter WDG_KICK_CYCLES = (WDG_KICK_INTERVAL_MS * CLK_FREQ_HZ) / 1000;
+    parameter WDG_TIMEOUT_CYCLES = (WDG_TIMEOUT_MS * CLK_FREQ_HZ) / 1000;
+    
     // Clock and reset
     reg clk = 0;
     reg rst_n = 0;
@@ -22,6 +34,14 @@ module tb;
     // Output signals for monitoring
     wire shutdown_out;
     wire led_status;
+    
+    // Watchdog control
+    reg wdg_enable = 0;         // Enable automatic watchdog kicking
+    
+    // Test control
+    integer test_number = 0;
+    integer pass_count = 0;
+    integer fail_count = 0;
     
     // Assign inputs to ui_in bus
     always @(*) begin
@@ -48,8 +68,22 @@ module tb;
         .rst_n(rst_n)
     );
     
-    // Clock generation (50MHz)
-    always #10 clk = ~clk;  // 20ns period = 50MHz
+    // Clock generation
+    always #(CLK_PERIOD/2) clk = ~clk;
+    
+    // Background watchdog kicking process
+    initial begin
+        forever begin
+            if (wdg_enable) begin
+                wdg_kick = 1'b1;
+                #(CLK_PERIOD * 2);
+                wdg_kick = 1'b0;
+                wait_cycles(WDG_KICK_CYCLES - 2);
+            end else begin
+                wait_cycles(100); // Small delay when disabled
+            end
+        end
+    end
     
     // Task to wait for clock cycles
     task wait_cycles;
@@ -62,6 +96,14 @@ module tb;
         end
     endtask
     
+    // Task to wait for time in milliseconds
+    task wait_ms;
+        input integer ms;
+        begin
+            wait_cycles((ms * CLK_FREQ_HZ) / 1000);
+        end
+    endtask
+    
     // Task to pulse ACK button
     task pulse_ack;
         begin
@@ -69,24 +111,16 @@ module tb;
             ack_n = 1'b0;
             wait_cycles(10);
             ack_n = 1'b1;
-            wait_cycles(10);
+            wait_cycles(DEBOUNCE_CYCLES);
         end
     endtask
     
-    // Task to pulse watchdog kick
-    task pulse_wdg_kick;
-        begin
-            wdg_kick = 1'b1;
-            wait_cycles(2);
-            wdg_kick = 1'b0;
-        end
-    endtask
-    
-    // Task to press and hold E-STOP A
+    // Task to press E-STOP A
     task press_estop_a;
         begin
             $display("[%0t] Pressing E-STOP A", $time);
             estop_a_n = 1'b0;
+            wait_cycles(DEBOUNCE_CYCLES);
         end
     endtask
     
@@ -95,14 +129,16 @@ module tb;
         begin
             $display("[%0t] Releasing E-STOP A", $time);
             estop_a_n = 1'b1;
+            wait_cycles(DEBOUNCE_CYCLES);
         end
     endtask
     
-    // Task to press and hold E-STOP B
+    // Task to press E-STOP B
     task press_estop_b;
         begin
             $display("[%0t] Pressing E-STOP B", $time);
             estop_b_n = 1'b0;
+            wait_cycles(DEBOUNCE_CYCLES);
         end
     endtask
     
@@ -111,32 +147,58 @@ module tb;
         begin
             $display("[%0t] Releasing E-STOP B", $time);
             estop_b_n = 1'b1;
+            wait_cycles(DEBOUNCE_CYCLES);
         end
     endtask
     
-    // Task to generate periodic watchdog kicks
-    task automatic_wdg_kicks;
-        input integer duration_ms;
-        integer cycles_per_kick;
-        integer total_cycles;
-        integer i;
+    // Task to start watchdog kicking
+    task start_watchdog;
         begin
-            cycles_per_kick = 10000000; // 200ms at 50MHz (kick every 200ms)
-            total_cycles = duration_ms * 50000; // Convert ms to cycles
-            
-            for (i = 0; i < total_cycles; i = i + cycles_per_kick) begin
-                pulse_wdg_kick();
-                wait_cycles(cycles_per_kick - 2);
+            $display("[%0t] Starting automatic watchdog kicks", $time);
+            wdg_enable = 1;
+        end
+    endtask
+    
+    // Task to stop watchdog kicking
+    task stop_watchdog;
+        begin
+            $display("[%0t] Stopping automatic watchdog kicks", $time);
+            wdg_enable = 0;
+        end
+    endtask
+    
+    // Task for test assertions
+    task check_outputs;
+        input expected_shutdown;
+        input expected_led;
+        input [255:0] test_name;
+        begin
+            if (shutdown_out === expected_shutdown && led_status === expected_led) begin
+                $display("✓ PASS: %s - SHUTDOWN=%b, LED=%b", test_name, shutdown_out, led_status);
+                pass_count = pass_count + 1;
+            end else begin
+                $display("✗ FAIL: %s - Expected SHUTDOWN=%b, LED=%b, Got SHUTDOWN=%b, LED=%b", 
+                        test_name, expected_shutdown, expected_led, shutdown_out, led_status);
+                fail_count = fail_count + 1;
             end
         end
     endtask
     
-    // Monitor outputs
+    // Task to print test header
+    task test_header;
+        input [255:0] test_name;
+        begin
+            test_number = test_number + 1;
+            $display("\n=== Test %0d: %s ===", test_number, test_name);
+        end
+    endtask
+    
+    // Monitor outputs for debugging
     reg prev_shutdown = 1'bx;
     reg prev_led = 1'bx;
     
     always @(posedge clk) begin
-        if ($time > 100) begin // Skip initial transients
+        if ($time > 1000 && rst_n) begin // Skip initial transients and reset
             if (shutdown_out !== prev_shutdown) begin
                 $display("[%0t] SHUTDOWN changed to %b", $time, shutdown_out);
                 prev_shutdown = shutdown_out;
@@ -148,150 +210,155 @@ module tb;
         end
     end
     
-    // Test sequence
+    // Main test sequence
     initial begin
         $display("=== ESD Controller Testbench Starting ===");
+        $display("Clock Frequency: %0d Hz", CLK_FREQ_HZ);
+        $display("Watchdog Kick Interval: %0d ms (%0d cycles)", WDG_KICK_INTERVAL_MS, WDG_KICK_CYCLES);
+        $display("Watchdog Timeout: %0d ms (%0d cycles)", WDG_TIMEOUT_MS, WDG_TIMEOUT_CYCLES);
+        
         $dumpfile("sim_build/rtl/tb.vcd");
         $dumpvars(0, tb);
         
-        // Initialize signals
+        // Initialize all signals
         estop_a_n = 1'b1;
         estop_b_n = 1'b1;
         ack_n = 1'b1;
         wdg_kick = 1'b0;
+        wdg_enable = 0;
         
         // Test 1: Reset behavior
-        $display("\n=== Test 1: Reset Behavior ===");
+        test_header("Reset Behavior");
         rst_n = 1'b0;
-        wait_cycles(100);
+        wait_cycles(STARTUP_CYCLES);
         rst_n = 1'b1;
-        wait_cycles(100);
+        wait_cycles(STARTUP_CYCLES);
         
-        // Check safe startup state
-        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
-            $display("✓ PASS: Safe startup state - SHUTDOWN=1, LED=1");
-        end else begin
-            $display("✗ FAIL: Safe startup state - SHUTDOWN=%b, LED=%b", shutdown_out, led_status);
-        end
+        // Check safe startup state (should be in shutdown mode)
+        check_outputs(1'b1, 1'b1, "Safe startup state");
         
-        // Test 2: ACK button functionality
-        $display("\n=== Test 2: ACK Button Functionality ===");
+        // Test 2: ACK button without releasing E-STOPs
+        test_header("ACK Button Without E-STOP Release");
         pulse_ack();
-        wait_cycles(1000); // Wait for debouncing
         
-        if (shutdown_out == 1'b1) begin
-            $display("✓ PASS: System remains in shutdown after ACK (E-STOPs not released)");
-        end else begin
-            $display("✗ FAIL: Unexpected shutdown state after ACK");
-        end
+        // System should remain in shutdown (E-STOPs still considered active)
+        check_outputs(1'b1, 1'b1, "System remains in shutdown after ACK only");
         
-        // Test 3: Normal operation with watchdog
-        $display("\n=== Test 3: Normal Operation with Watchdog ===");
-        // Start automatic watchdog kicking
-        fork
-            automatic_wdg_kicks(2000); // Kick for 2 seconds
-        join_none
+        // Test 3: Transition to normal operation
+        test_header("Transition to Normal Operation");
+        start_watchdog();
+        wait_ms(600); // Wait longer than one watchdog cycle
         
-        wait_cycles(50000); // Wait a bit for system to stabilize
-        
-        // System should be in normal operation mode now
-        if (shutdown_out == 1'b0) begin
-            $display("✓ PASS: System in normal operation mode");
-        end else begin
-            $display("✗ FAIL: System not in normal operation mode");
-        end
+        // System should now be in normal operation
+        check_outputs(1'b0, 1'b0, "Normal operation mode");
         
         // Test 4: E-STOP A functionality
-        $display("\n=== Test 4: E-STOP A Functionality ===");
+        test_header("E-STOP A Functionality");
         press_estop_a();
-        wait_cycles(1000); // Wait for debouncing
         
-        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
-            $display("✓ PASS: E-STOP A triggered shutdown");
-        end else begin
-            $display("✗ FAIL: E-STOP A did not trigger shutdown properly");
-        end
+        // Should trigger shutdown immediately
+        check_outputs(1'b1, 1'b1, "E-STOP A triggered shutdown");
         
-        // Release E-STOP A and ACK
+        // Recovery from E-STOP A
         release_estop_a();
-        wait_cycles(1000);
         pulse_ack();
-        wait_cycles(1000);
+        wait_ms(600); // Wait for system to stabilize
         
-        // Resume watchdog kicking
-        fork
-            automatic_wdg_kicks(1000); // Kick for 1 second
-        join_none
-        
-        wait_cycles(50000);
-        
-        if (shutdown_out == 1'b0) begin
-            $display("✓ PASS: Recovery from E-STOP A successful");
-        end else begin
-            $display("✗ FAIL: Recovery from E-STOP A failed");
-        end
+        check_outputs(1'b0, 1'b0, "Recovery from E-STOP A");
         
         // Test 5: E-STOP B functionality  
-        $display("\n=== Test 5: E-STOP B Functionality ===");
+        test_header("E-STOP B Functionality");
         press_estop_b();
-        wait_cycles(1000);
         
-        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
-            $display("✓ PASS: E-STOP B triggered shutdown");
-        end else begin
-            $display("✗ FAIL: E-STOP B did not trigger shutdown properly");
-        end
+        // Should trigger shutdown immediately
+        check_outputs(1'b1, 1'b1, "E-STOP B triggered shutdown");
         
-        // Release E-STOP B and ACK
+        // Recovery from E-STOP B
         release_estop_b();
-        wait_cycles(1000);
         pulse_ack();
-        wait_cycles(1000);
+        wait_ms(600); // Wait for system to stabilize
         
-        // Resume watchdog kicking
-        fork
-            automatic_wdg_kicks(1000); // Kick for 1 second  
-        join_none
+        check_outputs(1'b0, 1'b0, "Recovery from E-STOP B");
         
-        wait_cycles(50000);
+        // Test 6: Dual E-STOP functionality
+        test_header("Dual E-STOP Functionality");
+        press_estop_a();
+        wait_cycles(100);
+        press_estop_b();
         
-        if (shutdown_out == 1'b0) begin
-            $display("✓ PASS: Recovery from E-STOP B successful");
-        end else begin
-            $display("✗ FAIL: Recovery from E-STOP B failed");
-        end
+        check_outputs(1'b1, 1'b1, "Both E-STOPs pressed");
         
-        // Test 6: Watchdog timeout
-        $display("\n=== Test 6: Watchdog Timeout ===");
-        // Stop kicking watchdog
-        wait_cycles(30000000); // Wait ~600ms (longer than 500ms timeout)
-        
-        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
-            $display("✓ PASS: Watchdog timeout triggered shutdown");
-        end else begin
-            $display("✗ FAIL: Watchdog timeout did not trigger shutdown");
-        end
-        
-        // Recover from watchdog timeout
+        // Release one E-STOP - should still be in shutdown
+        release_estop_a();
         pulse_ack();
+        wait_cycles(DEBOUNCE_CYCLES);
+        
+        check_outputs(1'b1, 1'b1, "One E-STOP still pressed");
+        
+        // Release second E-STOP and recover
+        release_estop_b();
+        pulse_ack();
+        wait_ms(600);
+        
+        check_outputs(1'b0, 1'b0, "Recovery from dual E-STOP");
+        
+        // Test 7: Watchdog timeout
+        test_header("Watchdog Timeout");
+        stop_watchdog();
+        wait_ms(WDG_TIMEOUT_MS + 100); // Wait longer than timeout
+        
+        check_outputs(1'b1, 1'b1, "Watchdog timeout triggered shutdown");
+        
+        // Recovery from watchdog timeout
+        pulse_ack();
+        start_watchdog();
+        wait_ms(600);
+        
+        check_outputs(1'b0, 1'b0, "Recovery from watchdog timeout");
+        
+        // Test 8: Multiple rapid E-STOP presses
+        test_header("Rapid E-STOP Operations");
+        press_estop_a();
+        wait_cycles(50);
+        release_estop_a();
+        wait_cycles(50);
+        press_estop_b();
+        wait_cycles(50);
+        release_estop_b();
+        
+        check_outputs(1'b1, 1'b1, "Rapid E-STOP operations");
+        
+        pulse_ack();
+        wait_ms(600);
+        
+        check_outputs(1'b0, 1'b0, "Recovery from rapid E-STOP operations");
+        
+        // Clean shutdown
+        stop_watchdog();
         wait_cycles(1000);
         
-        // Resume watchdog kicking
-        fork
-            automatic_wdg_kicks(1000); // Kick for 1 second
-        join_none
+        // Test summary
+        $display("\n=== Test Summary ===");
+        $display("Total Tests: %0d", pass_count + fail_count);
+        $display("Passed: %0d", pass_count);
+        $display("Failed: %0d", fail_count);
         
-        wait_cycles(50000);
-        
-        if (shutdown_out == 1'b0) begin
-            $display("✓ PASS: Recovery from watchdog timeout successful");
+        if (fail_count == 0) begin
+            $display("🎉 ALL TESTS PASSED! 🎉");
         end else begin
-            $display("✗ FAIL: Recovery from watchdog timeout failed");
+            $display("❌ %0d TESTS FAILED", fail_count);
         end
         
         $display("\n=== ESD Controller Testbench Complete ===");
-        wait_cycles(1000);
+        wait_cycles(100);
+        $finish;
     end
     
+    // Simulation timeout watchdog
+    initial begin
+        #100_000_000; // 100ms timeout
+        $display("ERROR: Simulation timeout!");
+        $finish;
+    end
     
 endmodule
