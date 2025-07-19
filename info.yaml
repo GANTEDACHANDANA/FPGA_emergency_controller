@@ -1,7 +1,7 @@
 # Tiny Tapeout project information
 project:
   title:        "ESD Controller with Watchdog Timer"      # Project title
-  author:       ""      # Your name
+  author:       "GANTEDA CHANDANA"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
   description:  "Emergency Stop Device controller with dual E-STOP inputs, watchdog timer, and status LED"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
