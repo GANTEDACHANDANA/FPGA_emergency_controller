@@ -170,11 +170,9 @@ module Esd_controller(
     input  estop_a_n,       // E-STOP A (active-low)
     input  estop_b_n,       // E-STOP B (active-low)
     input  ack_n,           // ACK / Reset button (active-low)
-    input  wdg_kick, 
-    input async_in,	 // Watchdog kick input
+    input  wdg_kick,  // Watchdog kick input
     output shutdown_o,      // Shutdown output
-    output led_stat_o,       // Status LED
-    output sync_out
+    output led_stat_o       // Status LED
 );
 reg sync_o;
 parameter CLK_HZ = 24000000;
@@ -228,11 +226,11 @@ assign shutdown_o = shutdown;
 
     // Status LED blinker (active only if no fault)
     wire blink_led;
-    slow_blinker #(.CLK_HZ(CLK_HZ)) blink_inst (
-        .clk(clk),
-        .rst_n(~latched_fault),  // LED blinks only when no fault
-        .led(blink_led)
-    );
+slow_blinker #(.CLK_HZ(CLK_HZ)) blink_inst (
+    .clk(clk),
+    .rst_n(rst_n & ~latched_fault),  // Proper reset when rst_n is low OR fault exists
+    .led(blink_led)
+);
 
     assign led_stat_o = latched_fault ? 1'b1 : blink_led;
 	 
