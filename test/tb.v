@@ -291,14 +291,7 @@ module tb;
         
         $display("\n=== ESD Controller Testbench Complete ===");
         wait_cycles(1000);
-        $finish;
     end
     
-    // Timeout watchdog for simulation
-    initial begin
-        #100000000; // 100ms timeout for entire simulation
-        $display("ERROR: Simulation timeout!");
-        $finish;
-    end
     
 endmodule
