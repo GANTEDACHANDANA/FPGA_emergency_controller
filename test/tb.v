@@ -186,8 +186,8 @@ module tb;
         $display("Watchdog Kick Interval: %0d ms (%0d cycles)", WDG_KICK_INTERVAL_MS, WDG_KICK_CYCLES);
         $display("Watchdog Timeout: %0d ms (%0d cycles)", WDG_TIMEOUT_MS, WDG_TIMEOUT_CYCLES);
 
-        $dumpfile("sim_build/rtl/tb.vcd");
-        $dumpvars(0, tb);
+        // $dumpfile("sim_build/rtl/tb.vcd");
+        // $dumpvars(0, tb);
 
         estop_a_n = 1'b1;
         estop_b_n = 1'b1;
