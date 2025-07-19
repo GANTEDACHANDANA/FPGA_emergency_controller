@@ -18,12 +18,10 @@ module tb;
     reg estop_b_n = 1'b1;       // E-STOP B (active-low)
     reg ack_n = 1'b1;           // ACK button (active-low)
     reg wdg_kick = 1'b0;        // Watchdog kick
-    reg async_in = 1'b0;        // Async input
     
     // Output signals for monitoring
     wire shutdown_out;
     wire led_status;
-    wire sync_out;
     
     // Assign inputs to ui_in bus
     always @(*) begin
@@ -31,14 +29,12 @@ module tb;
         ui_in[1] = estop_b_n;
         ui_in[2] = ack_n;
         ui_in[3] = wdg_kick;
-        ui_in[4] = async_in;
-        ui_in[7:5] = 3'b000;
+        ui_in[7:4] = 4'b0000;   // Unused inputs
     end
     
     // Extract outputs from uo_out bus
     assign shutdown_out = uo_out[0];
     assign led_status = uo_out[1];
-    assign sync_out = uo_out[2];
     
     // Instantiate the Device Under Test (DUT)
     tt_um_example dut (
@@ -136,13 +132,18 @@ module tb;
     endtask
     
     // Monitor outputs
+    reg prev_shutdown = 1'bx;
+    reg prev_led = 1'bx;
+    
     always @(posedge clk) begin
         if ($time > 100) begin // Skip initial transients
-            if (shutdown_out !== shutdown_out) begin
+            if (shutdown_out !== prev_shutdown) begin
                 $display("[%0t] SHUTDOWN changed to %b", $time, shutdown_out);
+                prev_shutdown = shutdown_out;
             end
-            if (led_status !== led_status) begin
+            if (led_status !== prev_led) begin
                 $display("[%0t] LED_STATUS changed to %b", $time, led_status);
+                prev_led = led_status;
             end
         end
     end
@@ -158,7 +159,6 @@ module tb;
         estop_b_n = 1'b1;
         ack_n = 1'b1;
         wdg_kick = 1'b0;
-        async_in = 1'b0;
         
         // Test 1: Reset behavior
         $display("\n=== Test 1: Reset Behavior ===");
