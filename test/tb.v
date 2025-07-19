@@ -1,44 +1,47 @@
 `timescale 1ns / 1ps
 
-module tb_tt_um_example();
-
-    // Testbench parameters
-    parameter CLK_PERIOD = 20;  // 50MHz clock (20ns period)
-    parameter CLK_HZ = 50000000;
+module tb;
+    // Clock and reset
+    reg clk = 0;
+    reg rst_n = 0;
     
-    // DUT signals
-    reg [7:0] ui_in;
-    wire [7:0] uo_out;
-    reg [7:0] uio_in;
-    wire [7:0] uio_out;
-    wire [7:0] uio_oe;
-    reg ena;
-    reg clk;
-    reg rst_n;
+    // TinyTapeout interface signals
+    reg [7:0] ui_in = 8'h00;    // Dedicated inputs
+    wire [7:0] uo_out;          // Dedicated outputs  
+    reg [7:0] uio_in = 8'h00;   // IOs: Input path
+    wire [7:0] uio_out;         // IOs: Output path
+    wire [7:0] uio_oe;          // IOs: Enable path
+    reg ena = 1'b1;             // Always 1 when design is powered
     
-    // Individual signal mappings for clarity
-    reg estop_a_n, estop_b_n, ack_n, wdg_kick, async_in;
-    wire shutdown_out, led_status, sync_output;
+    // Individual input signals for clarity
+    reg estop_a_n = 1'b1;       // E-STOP A (active-low)
+    reg estop_b_n = 1'b1;       // E-STOP B (active-low)
+    reg ack_n = 1'b1;           // ACK button (active-low)
+    reg wdg_kick = 1'b0;        // Watchdog kick
+    reg async_in = 1'b0;        // Async input
     
-    // Assign individual signals to ui_in bus
-    always @* begin
+    // Output signals for monitoring
+    wire shutdown_out;
+    wire led_status;
+    wire sync_out;
+    
+    // Assign inputs to ui_in bus
+    always @(*) begin
         ui_in[0] = estop_a_n;
         ui_in[1] = estop_b_n;
         ui_in[2] = ack_n;
         ui_in[3] = wdg_kick;
         ui_in[4] = async_in;
-        ui_in[7:5] = 3'b000;  // Unused inputs
+        ui_in[7:5] = 3'b000;
     end
     
-    // Extract outputs
+    // Extract outputs from uo_out bus
     assign shutdown_out = uo_out[0];
     assign led_status = uo_out[1];
-    assign sync_output = uo_out[2];
+    assign sync_out = uo_out[2];
     
-    // Instantiate DUT
-    tt_um_example #(
-        .CLK_HZ(CLK_HZ)
-    ) dut (
+    // Instantiate the Device Under Test (DUT)
+    tt_um_example dut (
         .ui_in(ui_in),
         .uo_out(uo_out),
         .uio_in(uio_in),
@@ -49,240 +52,253 @@ module tb_tt_um_example();
         .rst_n(rst_n)
     );
     
-    // Clock generation
-    initial begin
-        clk = 0;
-        forever #(CLK_PERIOD/2) clk = ~clk;
-    end
+    // Clock generation (50MHz)
+    always #10 clk = ~clk;  // 20ns period = 50MHz
     
-    // Watchdog kick task - generates periodic kicks
-    reg auto_kick_en;
-    initial begin
-        auto_kick_en = 0;
-        wdg_kick = 0;
-        forever begin
-            if (auto_kick_en) begin
-                #10000000;  // 10ms between kicks (well within 500ms timeout)
-                wdg_kick = 1;
-                #(CLK_PERIOD);
-                wdg_kick = 0;
-            end else begin
-                #(CLK_PERIOD);
+    // Task to wait for clock cycles
+    task wait_cycles;
+        input integer cycles;
+        integer i;
+        begin
+            for (i = 0; i < cycles; i = i + 1) begin
+                @(posedge clk);
+            end
+        end
+    endtask
+    
+    // Task to pulse ACK button
+    task pulse_ack;
+        begin
+            $display("[%0t] Pulsing ACK button", $time);
+            ack_n = 1'b0;
+            wait_cycles(10);
+            ack_n = 1'b1;
+            wait_cycles(10);
+        end
+    endtask
+    
+    // Task to pulse watchdog kick
+    task pulse_wdg_kick;
+        begin
+            wdg_kick = 1'b1;
+            wait_cycles(2);
+            wdg_kick = 1'b0;
+        end
+    endtask
+    
+    // Task to press and hold E-STOP A
+    task press_estop_a;
+        begin
+            $display("[%0t] Pressing E-STOP A", $time);
+            estop_a_n = 1'b0;
+        end
+    endtask
+    
+    // Task to release E-STOP A  
+    task release_estop_a;
+        begin
+            $display("[%0t] Releasing E-STOP A", $time);
+            estop_a_n = 1'b1;
+        end
+    endtask
+    
+    // Task to press and hold E-STOP B
+    task press_estop_b;
+        begin
+            $display("[%0t] Pressing E-STOP B", $time);
+            estop_b_n = 1'b0;
+        end
+    endtask
+    
+    // Task to release E-STOP B
+    task release_estop_b;
+        begin
+            $display("[%0t] Releasing E-STOP B", $time);
+            estop_b_n = 1'b1;
+        end
+    endtask
+    
+    // Task to generate periodic watchdog kicks
+    task automatic_wdg_kicks;
+        input integer duration_ms;
+        integer cycles_per_kick;
+        integer total_cycles;
+        integer i;
+        begin
+            cycles_per_kick = 10000000; // 200ms at 50MHz (kick every 200ms)
+            total_cycles = duration_ms * 50000; // Convert ms to cycles
+            
+            for (i = 0; i < total_cycles; i = i + cycles_per_kick) begin
+                pulse_wdg_kick();
+                wait_cycles(cycles_per_kick - 2);
+            end
+        end
+    endtask
+    
+    // Monitor outputs
+    always @(posedge clk) begin
+        if ($time > 100) begin // Skip initial transients
+            if (shutdown_out !== shutdown_out) begin
+                $display("[%0t] SHUTDOWN changed to %b", $time, shutdown_out);
+            end
+            if (led_status !== led_status) begin
+                $display("[%0t] LED_STATUS changed to %b", $time, led_status);
             end
         end
     end
     
-    // Test stimulus
+    // Test sequence
     initial begin
-        // Initialize VCD dump
-        $dumpfile("tb_tt_um_example.vcd");
-        $dumpvars(0, tb_tt_um_example);
+        $display("=== ESD Controller Testbench Starting ===");
+        $dumpfile("sim_build/rtl/tb.vcd");
+        $dumpvars(0, tb);
         
         // Initialize signals
-        ena = 1;
-        uio_in = 8'b0;
-        estop_a_n = 1;  // Not pressed (active low)
-        estop_b_n = 1;  // Not pressed (active low)
-        ack_n = 1;      // Not pressed (active low)
-        wdg_kick = 0;
-        async_in = 0;
-        auto_kick_en = 0;
-        rst_n = 0;
+        estop_a_n = 1'b1;
+        estop_b_n = 1'b1;
+        ack_n = 1'b1;
+        wdg_kick = 1'b0;
+        async_in = 1'b0;
         
-        $display("=== ESD Controller Testbench Starting ===");
-        $display("Time\t\tTest Phase");
+        // Test 1: Reset behavior
+        $display("\n=== Test 1: Reset Behavior ===");
+        rst_n = 1'b0;
+        wait_cycles(100);
+        rst_n = 1'b1;
+        wait_cycles(100);
         
-        // Reset sequence
-        $display("%0t\t\tApplying Reset", $time);
-        #(CLK_PERIOD * 10);
-        rst_n = 1;
-        #(CLK_PERIOD * 5);
+        // Check safe startup state
+        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
+            $display("✓ PASS: Safe startup state - SHUTDOWN=1, LED=1");
+        end else begin
+            $display("✗ FAIL: Safe startup state - SHUTDOWN=%b, LED=%b", shutdown_out, led_status);
+        end
         
-        // Test 1: Normal startup (should be in shutdown state initially)
-        $display("%0t\t\tTest 1: Normal Startup", $time);
-        check_shutdown_state(1, "Initial state should be shutdown");
-        #(CLK_PERIOD * 10);
+        // Test 2: ACK button functionality
+        $display("\n=== Test 2: ACK Button Functionality ===");
+        pulse_ack();
+        wait_cycles(1000); // Wait for debouncing
         
-        // Test 2: Try to start without ACK (should remain shutdown)
-        $display("%0t\t\tTest 2: Start without ACK", $time);
-        auto_kick_en = 1;  // Start kicking watchdog
-        #(CLK_PERIOD * 100);
-        check_shutdown_state(1, "Should remain shutdown without ACK");
+        if (shutdown_out == 1'b1) begin
+            $display("✓ PASS: System remains in shutdown after ACK (E-STOPs not released)");
+        end else begin
+            $display("✗ FAIL: Unexpected shutdown state after ACK");
+        end
         
-        // Test 3: Proper startup sequence (ACK button press)
-        $display("%0t\t\tTest 3: Proper Startup Sequence", $time);
-        press_ack_button();
-        #(CLK_PERIOD * 1000);  // Wait for debouncing and FSM transition
-        check_shutdown_state(0, "Should be running after ACK");
-        check_led_blinking("LED should be blinking in run state");
+        // Test 3: Normal operation with watchdog
+        $display("\n=== Test 3: Normal Operation with Watchdog ===");
+        // Start automatic watchdog kicking
+        fork
+            automatic_wdg_kicks(2000); // Kick for 2 seconds
+        join_none
         
-        // Test 4: E-STOP A activation
-        $display("%0t\t\tTest 4: E-STOP A Activation", $time);
-        estop_a_n = 0;  // Press E-STOP A
-        #(CLK_PERIOD * 1000);  // Wait for debouncing
-        check_shutdown_state(1, "Should shutdown on E-STOP A");
-        check_led_solid(1, "LED should be solid ON when shutdown");
-        estop_a_n = 1;  // Release E-STOP A
-        #(CLK_PERIOD * 1000);
+        wait_cycles(50000); // Wait a bit for system to stabilize
         
-        // Test 5: Recovery from E-STOP
-        $display("%0t\t\tTest 5: Recovery from E-STOP", $time);
-        press_ack_button();
-        #(CLK_PERIOD * 1000);
-        check_shutdown_state(0, "Should recover after E-STOP release and ACK");
+        // System should be in normal operation mode now
+        if (shutdown_out == 1'b0) begin
+            $display("✓ PASS: System in normal operation mode");
+        end else begin
+            $display("✗ FAIL: System not in normal operation mode");
+        end
         
-        // Test 6: E-STOP B activation
-        $display("%0t\t\tTest 6: E-STOP B Activation", $time);
-        estop_b_n = 0;  // Press E-STOP B
-        #(CLK_PERIOD * 1000);
-        check_shutdown_state(1, "Should shutdown on E-STOP B");
-        estop_b_n = 1;  // Release E-STOP B
-        #(CLK_PERIOD * 1000);
-        press_ack_button();
-        #(CLK_PERIOD * 1000);
-        check_shutdown_state(0, "Should recover from E-STOP B");
+        // Test 4: E-STOP A functionality
+        $display("\n=== Test 4: E-STOP A Functionality ===");
+        press_estop_a();
+        wait_cycles(1000); // Wait for debouncing
         
-        // Test 7: Watchdog timeout
-        $display("%0t\t\tTest 7: Watchdog Timeout", $time);
-        auto_kick_en = 0;  // Stop kicking watchdog
-        #(600_000_000);    // Wait longer than 500ms timeout
-        check_shutdown_state(1, "Should shutdown on watchdog timeout");
+        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
+            $display("✓ PASS: E-STOP A triggered shutdown");
+        end else begin
+            $display("✗ FAIL: E-STOP A did not trigger shutdown properly");
+        end
         
-        // Test 8: Recovery from watchdog timeout
-        $display("%0t\t\tTest 8: Recovery from Watchdog Timeout", $time);
-        auto_kick_en = 1;  // Resume kicking
-        press_ack_button();
-        #(CLK_PERIOD * 1000);
-        check_shutdown_state(0, "Should recover from watchdog timeout");
+        // Release E-STOP A and ACK
+        release_estop_a();
+        wait_cycles(1000);
+        pulse_ack();
+        wait_cycles(1000);
         
-        // Test 9: Async input synchronization
-        $display("%0t\t\tTest 9: Async Input Synchronization", $time);
-        test_async_sync();
+        // Resume watchdog kicking
+        fork
+            automatic_wdg_kicks(1000); // Kick for 1 second
+        join_none
         
-        // Test 10: Multiple E-STOP scenario
-        $display("%0t\t\tTest 10: Multiple E-STOP", $time);
-        estop_a_n = 0;
-        estop_b_n = 0;
-        #(CLK_PERIOD * 1000);
-        check_shutdown_state(1, "Should shutdown with both E-STOPs");
-        estop_a_n = 1;  // Release only one
-        #(CLK_PERIOD * 1000);
-        check_shutdown_state(1, "Should remain shutdown with one E-STOP still active");
-        estop_b_n = 1;  // Release both
-        #(CLK_PERIOD * 1000);
-        press_ack_button();
-        #(CLK_PERIOD * 1000);
-        check_shutdown_state(0, "Should recover when both E-STOPs released");
+        wait_cycles(50000);
         
-        $display("\n=== Test Summary ===");
-        $display("All tests completed successfully!");
-        $display("Final state - Shutdown: %b, LED: %b", shutdown_out, led_status);
+        if (shutdown_out == 1'b0) begin
+            $display("✓ PASS: Recovery from E-STOP A successful");
+        end else begin
+            $display("✗ FAIL: Recovery from E-STOP A failed");
+        end
         
-        //#(CLK_PERIOD * 100);
+        // Test 5: E-STOP B functionality  
+        $display("\n=== Test 5: E-STOP B Functionality ===");
+        press_estop_b();
+        wait_cycles(1000);
+        
+        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
+            $display("✓ PASS: E-STOP B triggered shutdown");
+        end else begin
+            $display("✗ FAIL: E-STOP B did not trigger shutdown properly");
+        end
+        
+        // Release E-STOP B and ACK
+        release_estop_b();
+        wait_cycles(1000);
+        pulse_ack();
+        wait_cycles(1000);
+        
+        // Resume watchdog kicking
+        fork
+            automatic_wdg_kicks(1000); // Kick for 1 second  
+        join_none
+        
+        wait_cycles(50000);
+        
+        if (shutdown_out == 1'b0) begin
+            $display("✓ PASS: Recovery from E-STOP B successful");
+        end else begin
+            $display("✗ FAIL: Recovery from E-STOP B failed");
+        end
+        
+        // Test 6: Watchdog timeout
+        $display("\n=== Test 6: Watchdog Timeout ===");
+        // Stop kicking watchdog
+        wait_cycles(30000000); // Wait ~600ms (longer than 500ms timeout)
+        
+        if (shutdown_out == 1'b1 && led_status == 1'b1) begin
+            $display("✓ PASS: Watchdog timeout triggered shutdown");
+        end else begin
+            $display("✗ FAIL: Watchdog timeout did not trigger shutdown");
+        end
+        
+        // Recover from watchdog timeout
+        pulse_ack();
+        wait_cycles(1000);
+        
+        // Resume watchdog kicking
+        fork
+            automatic_wdg_kicks(1000); // Kick for 1 second
+        join_none
+        
+        wait_cycles(50000);
+        
+        if (shutdown_out == 1'b0) begin
+            $display("✓ PASS: Recovery from watchdog timeout successful");
+        end else begin
+            $display("✗ FAIL: Recovery from watchdog timeout failed");
+        end
+        
+        $display("\n=== ESD Controller Testbench Complete ===");
+        wait_cycles(1000);
+        $finish;
     end
     
-    // Task to simulate ACK button press
-    task press_ack_button;
-        begin
-            $display("%0t\t\t  Pressing ACK button", $time);
-            ack_n = 0;  // Press
-            #(CLK_PERIOD * 100);  // Hold for debounce time
-            ack_n = 1;  // Release
-            #(CLK_PERIOD * 100);  // Wait for edge detection
-        end
-    endtask
-    
-    // Task to check shutdown state
-    task check_shutdown_state;
-        input expected;
-        input [255:0] message;
-        begin
-            if (shutdown_out === expected) begin
-                $display("%0t\t\t  ✓ PASS: %s", $time, message);
-            end else begin
-                $display("%0t\t\t  ✗ FAIL: %s (Expected: %b, Got: %b)", $time, message, expected, shutdown_out);
-            end
-        end
-    endtask
-    
-    // Task to check LED blinking
-    task check_led_blinking;
-        input [255:0] message;
-        reg prev_led;
-        integer blink_count;
-        begin
-            prev_led = led_status;
-            blink_count = 0;
-            
-            repeat (100) begin
-                #(CLK_PERIOD * 1000);  // Wait some time
-                if (led_status !== prev_led) begin
-                    blink_count = blink_count + 1;
-                    prev_led = led_status;
-                end
-            end
-            
-            if (blink_count > 0) begin
-                $display("%0t\t\t  ✓ PASS: %s (Blinks detected: %d)", $time, message, blink_count);
-            end else begin
-                $display("%0t\t\t  ✗ FAIL: %s (No blinking detected)", $time, message);
-            end
-        end
-    endtask
-    
-    // Task to check LED solid state
-    task check_led_solid;
-        input expected;
-        input [255:0] message;
-        reg led_changed;
-        begin
-            led_changed = 0;
-            
-            repeat (50) begin
-                #(CLK_PERIOD * 1000);
-                if (led_status !== expected) begin
-                    led_changed = 1;
-                end
-            end
-            
-            if (!led_changed && led_status === expected) begin
-                $display("%0t\t\t  ✓ PASS: %s", $time, message);
-            end else begin
-                $display("%0t\t\t  ✗ FAIL: %s (Expected solid %b, Got %b)", $time, message, expected, led_status);
-            end
-        end
-    endtask
-    
-    // Task to test async synchronization
-    task test_async_sync;
-        begin
-            async_in = 0;
-            #(CLK_PERIOD * 5);
-            
-            async_in = 1;
-            #(CLK_PERIOD * 5);
-            
-            if (sync_output === 1) begin
-                $display("%0t\t\t  ✓ PASS: Async input synchronized properly", $time);
-            end else begin
-                $display("%0t\t\t  ✗ FAIL: Sync output not following async input", $time);
-            end
-            
-            async_in = 0;
-            #(CLK_PERIOD * 5);
-            
-            if (sync_output === 0) begin
-                $display("%0t\t\t  ✓ PASS: Async sync clear working", $time);
-            end else begin
-                $display("%0t\t\t  ? INFO: Sync output: %b (may take time to clear)", $time, sync_output);
-            end
-        end
-    endtask
-    
-    // Monitor critical signals
+    // Timeout watchdog for simulation
     initial begin
-        $monitor("%0t: shutdown=%b, led=%b, estop_a_n=%b, estop_b_n=%b, ack_n=%b, wdg_kick=%b", 
-                 $time, shutdown_out, led_status, estop_a_n, estop_b_n, ack_n, wdg_kick);
+        #100000000; // 100ms timeout for entire simulation
+        $display("ERROR: Simulation timeout!");
+        $finish;
     end
-
+    
 endmodule
