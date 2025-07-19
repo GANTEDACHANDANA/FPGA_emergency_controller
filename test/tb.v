@@ -178,8 +178,7 @@ module tb_tt_um_example();
         $display("All tests completed successfully!");
         $display("Final state - Shutdown: %b, LED: %b", shutdown_out, led_status);
         
-        #(CLK_PERIOD * 100);
-        $finish;
+        //#(CLK_PERIOD * 100);
     end
     
     // Task to simulate ACK button press
